@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { runCommand, type Line } from "./commands";
 
-const PROMPT = "visitor@dmarcation:~$";
+const PROMPT = "visitor@dmarcation ~ %";
 
 const BANNER: Line[] = [
   { kind: "success", text: "dmarcation - a simple DMARC validator" },
@@ -84,7 +84,7 @@ export function Terminal() {
         <span className="dot dot-red" />
         <span className="dot dot-yellow" />
         <span className="dot dot-green" />
-        <span className="title">dmarcation — zsh</span>
+          <span className="title">dmarcation — zsh</span>
       </div>
 
       <div className="body" ref={bodyRef}>
