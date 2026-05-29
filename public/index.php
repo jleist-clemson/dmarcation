@@ -115,6 +115,10 @@ function serialize_lookup(LookupResult $result): array
 $path = rtrim(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/', '/');
 $method = $_SERVER['REQUEST_METHOD'];
 
+if ($path === '/api/health') {
+    send_json(['status' => 'ok']);
+}
+
 if ($path === '/api/validate' && in_array($method, ['POST', 'GET'], true)) {
     if ($method === 'POST') {
         $body = json_decode(file_get_contents('php://input') ?: '', true);

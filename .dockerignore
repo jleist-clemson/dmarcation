@@ -1,0 +1,21 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# PHP dependencies (installed fresh in the build)
+vendor/
+
+# Node dependencies and build output (rebuilt in the build)
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+
+# Docs and meta
+*.md
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
