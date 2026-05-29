@@ -1,6 +1,6 @@
 # dmarcation
 
-A simple DMARC validator, written in PHP.
+A simple DMARC validator, written in PHP and React, with dependency-free CSS. It's deployed on Railway and accessible via dmarcation.jonathanleist.com.
 
 ## License
 
