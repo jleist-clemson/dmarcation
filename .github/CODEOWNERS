@@ -1,0 +1,7 @@
+# Code owners for this repository.
+# See https://docs.github.com/articles/about-code-owners
+#
+# The last matching pattern takes precedence. The pattern below makes
+# @jleist-clemson the default owner for everything in the repo.
+
+* @jleist-clemson
