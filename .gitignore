@@ -1,6 +1,11 @@
 # Composer-installed dependencies (restored with `composer install`)
 /vendor/
 
+# Node / frontend build artifacts (restored with `npm install`)
+/web/node_modules/
+/web/dist/
+/web/*.tsbuildinfo
+
 # macOS
 .DS_Store
 
