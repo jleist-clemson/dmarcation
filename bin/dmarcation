@@ -1,0 +1,251 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use Jonathanleist\Dmarcation\DmarcLookup;
+use Jonathanleist\Dmarcation\DmarcRecord;
+use Jonathanleist\Dmarcation\Resolver\NetDns2Resolver;
+use Jonathanleist\Dmarcation\Resolver\ResolverException;
+use Jonathanleist\Dmarcation\Severity;
+
+$autoloaders = [
+    __DIR__ . '/../vendor/autoload.php',
+    __DIR__ . '/../../../autoload.php',
+];
+foreach ($autoloaders as $autoloader) {
+    if (is_file($autoloader)) {
+        require $autoloader;
+        break;
+    }
+}
+
+/**
+ * Whether ANSI colors should be used (a TTY and not explicitly disabled).
+ */
+function dmarcation_use_color(): bool
+{
+    if (getenv('NO_COLOR') !== false) {
+        return false;
+    }
+
+    return function_exists('posix_isatty') ? posix_isatty(STDOUT) : false;
+}
+
+function dmarcation_color(string $text, string $code): string
+{
+    if (!dmarcation_use_color()) {
+        return $text;
+    }
+
+    return "\033[{$code}m{$text}\033[0m";
+}
+
+function dmarcation_usage(): string
+{
+    return <<<TXT
+    dmarcation - a simple DMARC tool
+
+    Usage:
+      dmarcation validate "<record>"   Validate a DMARC record string
+      dmarcation "<record>"            Shorthand for validate
+      echo "<record>" | dmarcation     Read the record from standard input
+      dmarcation lookup <domain>       Fetch a domain's DMARC record and validate it
+        [--ns=<server>]                Query a specific nameserver (e.g. --ns=1.1.1.1)
+
+    Exit codes:
+      0  the record is valid (warnings may still be present)
+      1  the record is invalid, missing, or duplicated
+      2  usage error
+      3  DNS lookup failed
+    TXT;
+}
+
+/**
+ * Validate a record string, print a human-readable report, and return the
+ * process exit code (0 = valid, 1 = invalid).
+ */
+function dmarcation_report(string $record): int
+{
+    $result = DmarcRecord::fromString($record)->validate();
+
+    $tags = $result->getTags();
+    if ($tags !== []) {
+        fwrite(STDOUT, dmarcation_color('Parsed tags:', '1') . "\n");
+        foreach ($tags as $tag => $value) {
+            fwrite(STDOUT, sprintf("  %-6s = %s\n", $tag, $value));
+        }
+        fwrite(STDOUT, "\n");
+    }
+
+    foreach ($result->getIssues() as $issue) {
+        $label = $issue->severity === Severity::Error
+            ? dmarcation_color('ERROR', '1;31')
+            : dmarcation_color('WARN ', '1;33');
+        $location = $issue->tag !== null ? dmarcation_color(sprintf(' [%s]', $issue->tag), '36') : '';
+        fwrite(STDOUT, sprintf("  %s%s %s\n", $label, $location, $issue->message));
+    }
+
+    if ($result->getIssues() !== []) {
+        fwrite(STDOUT, "\n");
+    }
+
+    if ($result->isValid()) {
+        $summary = sprintf('Valid DMARC record (%d warning(s)).', count($result->getWarnings()));
+        fwrite(STDOUT, dmarcation_color($summary, '1;32') . "\n");
+
+        return 0;
+    }
+
+    $summary = sprintf(
+        'Invalid DMARC record (%d error(s), %d warning(s)).',
+        count($result->getErrors()),
+        count($result->getWarnings())
+    );
+    fwrite(STDOUT, dmarcation_color($summary, '1;31') . "\n");
+
+    return 1;
+}
+
+/**
+ * Handle the "lookup" subcommand: resolve a domain's DMARC record and validate.
+ *
+ * @param list<string> $args
+ */
+function dmarcation_lookup(array $args): int
+{
+    $domain = null;
+    $nameservers = [];
+
+    foreach ($args as $arg) {
+        if (str_starts_with($arg, '--ns=')) {
+            $nameservers[] = substr($arg, strlen('--ns='));
+        } elseif ($domain === null) {
+            $domain = $arg;
+        }
+    }
+
+    if ($domain === null) {
+        fwrite(STDERR, "error: no domain provided.\n\n" . dmarcation_usage() . "\n");
+
+        return 2;
+    }
+
+    $lookup = new DmarcLookup(new NetDns2Resolver($nameservers));
+
+    try {
+        $result = $lookup->forDomain($domain);
+    } catch (ResolverException $e) {
+        fwrite(STDERR, dmarcation_color('DNS error: ', '1;31') . $e->getMessage() . "\n");
+
+        return 3;
+    }
+
+    fwrite(STDOUT, dmarcation_color('Queries:', '1') . "\n");
+    foreach ($result->queries as $query) {
+        $count = count($query->records);
+        $note = match (true) {
+            $count === 0 => 'no record',
+            $count === 1 => 'found',
+            default => sprintf('%d records', $count),
+        };
+        fwrite(STDOUT, sprintf("  %s (TXT) - %s\n", $query->name, $note));
+    }
+    fwrite(STDOUT, "\n");
+
+    $multiple = $result->multipleQuery();
+    if ($multiple !== null) {
+        fwrite(STDOUT, dmarcation_color(
+            sprintf('Multiple DMARC records at %s (RFC 7489 requires exactly one):', $multiple->name),
+            '1;31'
+        ) . "\n");
+        foreach ($multiple->records as $record) {
+            fwrite(STDOUT, '  - ' . $record . "\n");
+        }
+
+        return 1;
+    }
+
+    if (!$result->found()) {
+        fwrite(STDOUT, dmarcation_color(sprintf('No DMARC record found for %s.', $result->domain), '1;31') . "\n");
+
+        return 1;
+    }
+
+    $record = (string) $result->record;
+
+    if ($result->isInherited()) {
+        fwrite(STDOUT, dmarcation_color(
+            sprintf(
+                'No record at _dmarc.%s; inherited from organizational domain %s.',
+                $result->domain,
+                $result->policyDomain
+            ),
+            '1;33'
+        ) . "\n");
+    }
+
+    fwrite(STDOUT, dmarcation_color('Record:', '1') . sprintf(' %s (published at _dmarc.%s)', $record, $result->policyDomain) . "\n\n");
+
+    $exitCode = dmarcation_report($record);
+
+    if ($result->isInherited()) {
+        dmarcation_print_effective_policy($result->domain, $record);
+    }
+
+    return $exitCode;
+}
+
+/**
+ * For an inherited record, show which policy actually governs the subdomain:
+ * the 'sp' (subdomain policy) tag if present, otherwise the 'p' tag.
+ */
+function dmarcation_print_effective_policy(string $domain, string $record): void
+{
+    $tags = DmarcRecord::fromString($record)->getTags();
+
+    if (isset($tags['sp'])) {
+        $policy = $tags['sp'];
+        $via = "via the 'sp' tag";
+    } elseif (isset($tags['p'])) {
+        $policy = $tags['p'];
+        $via = "via the 'p' tag (no 'sp' present)";
+    } else {
+        return;
+    }
+
+    fwrite(STDOUT, "\n" . dmarcation_color('Effective subdomain policy:', '1')
+        . sprintf(' %s for %s (%s).', $policy, $domain, $via) . "\n");
+}
+
+$args = array_slice($argv, 1);
+
+if ($args !== [] && in_array($args[0], ['-h', '--help', 'help'], true)) {
+    fwrite(STDOUT, dmarcation_usage() . "\n");
+    exit(0);
+}
+
+if ($args !== [] && $args[0] === 'lookup') {
+    exit(dmarcation_lookup(array_slice($args, 1)));
+}
+
+if ($args !== [] && $args[0] === 'validate') {
+    array_shift($args);
+}
+
+$record = $args[0] ?? null;
+
+if ($record === null) {
+    $stdin = stream_get_contents(STDIN);
+    if ($stdin !== false && trim($stdin) !== '') {
+        $record = trim($stdin);
+    }
+}
+
+if ($record === null) {
+    fwrite(STDERR, "error: no DMARC record provided.\n\n" . dmarcation_usage() . "\n");
+    exit(2);
+}
+
+fwrite(STDOUT, dmarcation_color('Record:', '1') . ' ' . $record . "\n\n");
+exit(dmarcation_report($record));

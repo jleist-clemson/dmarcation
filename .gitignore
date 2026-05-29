@@ -1,0 +1,10 @@
+# Composer-installed dependencies (restored with `composer install`)
+/vendor/
+
+# macOS
+.DS_Store
+
+# Editor/IDE
+/.idea/
+/.vscode/
+*.swp
