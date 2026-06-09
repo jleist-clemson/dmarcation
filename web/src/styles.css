@@ -35,6 +35,7 @@ body {
 
 .screen {
   height: 100%;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -125,6 +126,7 @@ body {
 .input-line {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .prompt {
@@ -135,6 +137,7 @@ body {
 
 .cmd-input {
   flex: 1;
+  min-width: 12ch;
   background: transparent;
   border: none;
   outline: none;
@@ -151,4 +154,25 @@ body {
 .body::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 8px;
+}
+
+/* On phones, let the terminal fill the screen and avoid iOS focus zoom. */
+@media (max-width: 640px) {
+  .screen {
+    padding: 0;
+  }
+
+  .terminal {
+    width: 100%;
+    height: 100dvh;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .body {
+    padding: 12px;
+    /* >=16px stops iOS Safari from auto-zooming when the input is focused */
+    font-size: 16px;
+  }
 }
