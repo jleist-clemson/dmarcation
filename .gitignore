@@ -1,6 +1,9 @@
 # Composer-installed dependencies (restored with `composer install`)
 /vendor/
 
+# PHPUnit
+/.phpunit.cache/
+
 # Node / frontend build artifacts (restored with `npm install`)
 /web/node_modules/
 /web/dist/

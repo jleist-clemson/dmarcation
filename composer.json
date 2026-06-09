@@ -8,6 +8,14 @@
             "Jonathanleist\\Dmarcation\\": "src/"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "Jonathanleist\\Dmarcation\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
     "authors": [
         {
             "name": "Jonathan Leist",
@@ -21,5 +29,8 @@
         "php": ">=8.2",
         "mikepultz/netdns2": "^2.0",
         "jeremykendall/php-domain-parser": "^6.4"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11"
     }
 }
