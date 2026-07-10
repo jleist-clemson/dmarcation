@@ -1,6 +1,6 @@
 # dmarcation
 
-A simple DMARC validator, written in PHP and React, with dependency-free CSS. It's deployed on Railway and accessible via dmarcation.jonathanleist.com.
+A simple DMARC and SPF validator, written in PHP and React, with dependency-free CSS. It's deployed on Railway and accessible via dmarcation.jonathanleist.com. The web terminal exposes each validator as a tab; the CLI exposes SPF under the `spf` subcommand.
 
 ## Usage
 
@@ -24,6 +24,14 @@ php bin/dmarcation lookup sub.example.com --ns=1.1.1.1
 ```
 
 You can also pipe a record in via standard input, and `php bin/dmarcation --help` prints full usage.
+
+Validate an SPF record, or look one up and evaluate its include/redirect tree against the RFC 7208 limit of 10 DNS lookups:
+
+```bash
+php bin/dmarcation spf validate "v=spf1 include:_spf.google.com ip4:192.0.2.0/24 ~all"
+php bin/dmarcation spf lookup github.com
+php bin/dmarcation spf lookup example.com --ns=1.1.1.1
+```
 
 Exit codes:
 

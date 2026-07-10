@@ -8,6 +8,9 @@ use Jonathanleist\Dmarcation\DmarcRecord;
 use Jonathanleist\Dmarcation\Resolver\NetDns2Resolver;
 use Jonathanleist\Dmarcation\Resolver\ResolverException;
 use Jonathanleist\Dmarcation\Severity;
+use Jonathanleist\Dmarcation\Spf\SpfEvaluationNode;
+use Jonathanleist\Dmarcation\Spf\SpfLookup;
+use Jonathanleist\Dmarcation\Spf\SpfRecord;
 
 $autoloaders = [
     __DIR__ . '/../vendor/autoload.php',
@@ -44,7 +47,7 @@ function dmarcation_color(string $text, string $code): string
 function dmarcation_usage(): string
 {
     return <<<TXT
-    dmarcation - a simple DMARC tool
+    dmarcation - a simple DMARC and SPF tool
 
     Usage:
       dmarcation validate "<record>"   Validate a DMARC record string
@@ -52,6 +55,9 @@ function dmarcation_usage(): string
       echo "<record>" | dmarcation     Read the record from standard input
       dmarcation lookup <domain>       Fetch a domain's DMARC record and validate it
         [--ns=<server>]                Query a specific nameserver (e.g. --ns=1.1.1.1)
+      dmarcation spf validate "<rec>"  Validate an SPF record string
+      dmarcation spf lookup <domain>   Fetch a domain's SPF record and evaluate it
+        [--ns=<server>]                ...following include/redirect (10-lookup limit)
 
     Exit codes:
       0  the record is valid (warnings may still be present)
@@ -218,11 +224,213 @@ function dmarcation_print_effective_policy(string $domain, string $record): void
         . sprintf(' %s for %s (%s).', $policy, $domain, $via) . "\n");
 }
 
+/**
+ * Print the errors and warnings collected in a ValidationResult.
+ */
+function dmarcation_print_issues(iterable $issues): void
+{
+    foreach ($issues as $issue) {
+        $label = $issue->severity === Severity::Error
+            ? dmarcation_color('ERROR', '1;31')
+            : dmarcation_color('WARN ', '1;33');
+        $location = $issue->tag !== null ? dmarcation_color(sprintf(' [%s]', $issue->tag), '36') : '';
+        fwrite(STDOUT, sprintf("  %s%s %s\n", $label, $location, $issue->message));
+    }
+}
+
+/**
+ * Validate an SPF record string, print a report, and return the exit code.
+ */
+function dmarcation_spf_report(string $record): int
+{
+    $spf = SpfRecord::fromString($record);
+    $result = $spf->validate();
+
+    $terms = $spf->getTerms();
+    if ($terms !== []) {
+        fwrite(STDOUT, dmarcation_color('Parsed terms:', '1') . "\n");
+        foreach ($terms as $term) {
+            $marker = $term->causesLookup() ? dmarcation_color(' (DNS lookup)', '36') : '';
+            fwrite(STDOUT, sprintf("  %-32s %s%s\n", $term->raw, $term->describe(), $marker));
+        }
+        fwrite(STDOUT, "\n");
+    }
+
+    dmarcation_print_issues($result->getIssues());
+    if ($result->getIssues() !== []) {
+        fwrite(STDOUT, "\n");
+    }
+
+    if ($result->isValid()) {
+        $summary = sprintf('Valid SPF record (%d warning(s)).', count($result->getWarnings()));
+        fwrite(STDOUT, dmarcation_color($summary, '1;32') . "\n");
+
+        return 0;
+    }
+
+    $summary = sprintf(
+        'Invalid SPF record (%d error(s), %d warning(s)).',
+        count($result->getErrors()),
+        count($result->getWarnings())
+    );
+    fwrite(STDOUT, dmarcation_color($summary, '1;31') . "\n");
+
+    return 1;
+}
+
+/**
+ * Print a node of the SPF include/redirect tree, indented by depth.
+ */
+function dmarcation_spf_print_node(SpfEvaluationNode $node, int $depth): void
+{
+    $indent = str_repeat('  ', $depth);
+    $via = $node->via === 'root' ? '' : $node->via . ': ';
+    $lookups = $node->directLookups > 0 ? dmarcation_color(sprintf(' [%d]', $node->directLookups), '36') : '';
+    $note = $node->note !== null ? dmarcation_color(sprintf('  (%s)', $node->note), '1;33') : '';
+    fwrite(STDOUT, sprintf("  %s%s%s%s%s\n", $indent, $via, $node->domain, $lookups, $note));
+
+    foreach ($node->children as $child) {
+        dmarcation_spf_print_node($child, $depth + 1);
+    }
+}
+
+/**
+ * Handle the "spf lookup" subcommand: resolve a domain's SPF record and evaluate
+ * its include/redirect tree against the RFC 7208 lookup limits.
+ *
+ * @param list<string> $args
+ */
+function dmarcation_spf_lookup(array $args): int
+{
+    $domain = null;
+    $nameservers = [];
+
+    foreach ($args as $arg) {
+        if (str_starts_with($arg, '--ns=')) {
+            $nameservers[] = substr($arg, strlen('--ns='));
+        } elseif ($domain === null) {
+            $domain = $arg;
+        }
+    }
+
+    if ($domain === null) {
+        fwrite(STDERR, "error: no domain provided.\n\n" . dmarcation_usage() . "\n");
+
+        return 2;
+    }
+
+    $lookup = new SpfLookup(new NetDns2Resolver($nameservers));
+
+    try {
+        $result = $lookup->forDomain($domain);
+    } catch (ResolverException $e) {
+        fwrite(STDERR, dmarcation_color('DNS error: ', '1;31') . $e->getMessage() . "\n");
+
+        return 3;
+    }
+
+    if ($result->multiple) {
+        fwrite(STDOUT, dmarcation_color(
+            sprintf('Multiple SPF records at %s (exactly one is allowed):', $result->domain),
+            '1;31'
+        ) . "\n");
+        foreach ($result->multipleRecords() as $record) {
+            fwrite(STDOUT, '  - ' . $record . "\n");
+        }
+
+        return 1;
+    }
+
+    if (!$result->found()) {
+        fwrite(STDOUT, dmarcation_color(sprintf('No SPF record found for %s.', $result->domain), '1;31') . "\n");
+
+        return 1;
+    }
+
+    $record = (string) $result->record;
+    fwrite(STDOUT, dmarcation_color('Record:', '1') . ' ' . $record . "\n\n");
+
+    $exitCode = dmarcation_spf_report($record);
+
+    $evaluation = $result->evaluation;
+    if ($evaluation !== null) {
+        fwrite(STDOUT, "\n" . dmarcation_color('Include/redirect tree:', '1') . "\n");
+        dmarcation_spf_print_node($evaluation->root, 0);
+        fwrite(STDOUT, "\n");
+
+        dmarcation_print_issues($evaluation->issues);
+        if ($evaluation->issues !== []) {
+            fwrite(STDOUT, "\n");
+        }
+
+        $color = $evaluation->withinLookupLimit() ? '1;32' : '1;31';
+        fwrite(STDOUT, dmarcation_color(
+            sprintf('DNS lookups: %d of %d', $evaluation->lookupCount, $evaluation->lookupLimit),
+            $color
+        ) . "\n");
+
+        if ($evaluation->voidCount > 0) {
+            $voidColor = $evaluation->withinVoidLimit() ? '1;33' : '1;31';
+            fwrite(STDOUT, dmarcation_color(
+                sprintf('Void lookups: %d of %d', $evaluation->voidCount, $evaluation->voidLimit),
+                $voidColor
+            ) . "\n");
+        }
+
+        if (!$evaluation->withinLookupLimit() || !$evaluation->withinVoidLimit()) {
+            return 1;
+        }
+    }
+
+    return $exitCode;
+}
+
+/**
+ * Handle the "spf" command family.
+ *
+ * @param list<string> $args
+ */
+function dmarcation_spf(array $args): int
+{
+    $sub = $args[0] ?? null;
+
+    if ($sub === 'lookup') {
+        return dmarcation_spf_lookup(array_slice($args, 1));
+    }
+
+    if ($sub === 'validate') {
+        array_shift($args);
+    }
+
+    $record = $args[0] ?? null;
+
+    if ($record === null) {
+        $stdin = stream_get_contents(STDIN);
+        if ($stdin !== false && trim($stdin) !== '') {
+            $record = trim($stdin);
+        }
+    }
+
+    if ($record === null) {
+        fwrite(STDERR, "error: no SPF record provided.\n\n" . dmarcation_usage() . "\n");
+
+        return 2;
+    }
+
+    fwrite(STDOUT, dmarcation_color('Record:', '1') . ' ' . $record . "\n\n");
+
+    return dmarcation_spf_report($record);
+}
+
 $args = array_slice($argv, 1);
 
 if ($args !== [] && in_array($args[0], ['-h', '--help', 'help'], true)) {
     fwrite(STDOUT, dmarcation_usage() . "\n");
     exit(0);
+}
+
+if ($args !== [] && $args[0] === 'spf') {
+    exit(dmarcation_spf(array_slice($args, 1)));
 }
 
 if ($args !== [] && $args[0] === 'lookup') {

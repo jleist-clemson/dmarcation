@@ -86,3 +86,80 @@ export function lookupDomain(
   }
   return requestJson<LookupResponse>(`/api/lookup?${params.toString()}`);
 }
+
+// --- SPF ---------------------------------------------------------------------
+
+export interface SpfTerm {
+  raw: string;
+  kind: "mechanism" | "modifier";
+  qualifier: string | null;
+  name: string;
+  value: string | null;
+  description: string;
+  causesLookup: boolean;
+}
+
+export interface SpfValidationData {
+  valid: boolean;
+  version: string | null;
+  terms: SpfTerm[];
+  issues: Issue[];
+  errorCount: number;
+  warningCount: number;
+  lookupTerms: number;
+}
+
+export interface SpfValidateResponse {
+  record: string;
+  validation: SpfValidationData;
+}
+
+export interface SpfTreeNode {
+  via: "root" | "include" | "redirect";
+  domain: string;
+  record: string | null;
+  directLookups: number;
+  note: string | null;
+  children: SpfTreeNode[];
+}
+
+export interface SpfEvaluation {
+  lookupCount: number;
+  lookupLimit: number;
+  voidCount: number;
+  voidLimit: number;
+  withinLimit: boolean;
+  withinVoidLimit: boolean;
+  tree: SpfTreeNode;
+  issues: Issue[];
+}
+
+export interface SpfLookupResponse {
+  domain: string;
+  record: string | null;
+  found: boolean;
+  multiple: boolean;
+  multipleRecords: string[];
+  queries: LookupQuery[];
+  validation: SpfValidationData | null;
+  evaluation: SpfEvaluation | null;
+}
+
+export function validateSpf(record: string): Promise<SpfValidateResponse> {
+  return requestJson<SpfValidateResponse>("/api/spf/validate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ record }),
+  });
+}
+
+export function lookupSpf(
+  domain: string,
+  nameserver?: string
+): Promise<SpfLookupResponse> {
+  const params = new URLSearchParams({ domain });
+  if (nameserver) {
+    params.set("ns", nameserver);
+  }
+  return requestJson<SpfLookupResponse>(`/api/spf/lookup?${params.toString()}`);
+}
