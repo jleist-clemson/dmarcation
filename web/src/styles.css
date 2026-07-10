@@ -81,8 +81,37 @@ body {
   background: #50fa7b;
 }
 
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-left: 12px;
+}
+
+.tab {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 12px;
+  cursor: pointer;
+  line-height: 1.4;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.tab:hover {
+  color: var(--fg);
+}
+
+.tab-active {
+  color: var(--fg);
+  background: var(--terminal-bg);
+  border-color: var(--border);
+}
+
 .title {
-  margin-left: 8px;
+  margin-left: auto;
   color: var(--muted);
   font-size: 12px;
 }
@@ -93,6 +122,10 @@ body {
   padding: 16px;
   font-size: 13.5px;
   line-height: 1.5;
+}
+
+.body-hidden {
+  display: none;
 }
 
 .line {
@@ -168,6 +201,11 @@ body {
     border: none;
     border-radius: 0;
     box-shadow: none;
+  }
+
+  /* Hide the window title on phones so the tabs have room. */
+  .title {
+    display: none;
   }
 
   .body {

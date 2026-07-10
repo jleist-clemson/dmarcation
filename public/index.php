@@ -18,6 +18,11 @@ use Jonathanleist\Dmarcation\DmarcRecord;
 use Jonathanleist\Dmarcation\LookupResult;
 use Jonathanleist\Dmarcation\Resolver\NetDns2Resolver;
 use Jonathanleist\Dmarcation\Resolver\ResolverException;
+use Jonathanleist\Dmarcation\Spf\SpfEvaluationNode;
+use Jonathanleist\Dmarcation\Spf\SpfEvaluationResult;
+use Jonathanleist\Dmarcation\Spf\SpfLookup;
+use Jonathanleist\Dmarcation\Spf\SpfLookupResult;
+use Jonathanleist\Dmarcation\Spf\SpfRecord;
 use Jonathanleist\Dmarcation\ValidationResult;
 
 require __DIR__ . '/../vendor/autoload.php';
@@ -43,27 +48,138 @@ function send_json(array $data, int $status = 200): never
 }
 
 /**
- * Serialize a ValidationResult into a JSON-friendly array.
+ * Serialize a list of ValidationIssue objects into JSON-friendly arrays.
  *
- * @return array<string, mixed>
+ * @param iterable<\Jonathanleist\Dmarcation\ValidationIssue> $issues
+ *
+ * @return list<array<string, mixed>>
  */
-function serialize_validation(ValidationResult $result): array
+function serialize_issues(iterable $issues): array
 {
-    $issues = [];
-    foreach ($result->getIssues() as $issue) {
-        $issues[] = [
+    $out = [];
+    foreach ($issues as $issue) {
+        $out[] = [
             'severity' => $issue->severity->value,
             'tag' => $issue->tag,
             'message' => $issue->message,
         ];
     }
 
+    return $out;
+}
+
+/**
+ * Serialize a ValidationResult into a JSON-friendly array.
+ *
+ * @return array<string, mixed>
+ */
+function serialize_validation(ValidationResult $result): array
+{
     return [
         'valid' => $result->isValid(),
         'tags' => $result->getTags(),
-        'issues' => $issues,
+        'issues' => serialize_issues($result->getIssues()),
         'errorCount' => count($result->getErrors()),
         'warningCount' => count($result->getWarnings()),
+    ];
+}
+
+/**
+ * Serialize an SpfRecord's syntax validation, including its parsed terms.
+ *
+ * @return array<string, mixed>
+ */
+function serialize_spf_validation(SpfRecord $record): array
+{
+    $result = $record->validate();
+
+    $terms = [];
+    foreach ($record->getTerms() as $term) {
+        $terms[] = [
+            'raw' => $term->raw,
+            'kind' => $term->isModifier ? 'modifier' : 'mechanism',
+            'qualifier' => $term->effectiveQualifier(),
+            'name' => $term->name,
+            'value' => $term->value,
+            'description' => $term->describe(),
+            'causesLookup' => $term->causesLookup(),
+        ];
+    }
+
+    return [
+        'valid' => $result->isValid(),
+        'version' => $record->getVersion(),
+        'terms' => $terms,
+        'issues' => serialize_issues($result->getIssues()),
+        'errorCount' => count($result->getErrors()),
+        'warningCount' => count($result->getWarnings()),
+        'lookupTerms' => $record->countLookupTerms(),
+    ];
+}
+
+/**
+ * Serialize a node of the SPF include/redirect tree, recursively.
+ *
+ * @return array<string, mixed>
+ */
+function serialize_spf_node(SpfEvaluationNode $node): array
+{
+    return [
+        'via' => $node->via,
+        'domain' => $node->domain,
+        'record' => $node->record,
+        'directLookups' => $node->directLookups,
+        'note' => $node->note,
+        'children' => array_map('serialize_spf_node', $node->children),
+    ];
+}
+
+/**
+ * Serialize the recursive SPF lookup evaluation.
+ *
+ * @return array<string, mixed>
+ */
+function serialize_spf_evaluation(SpfEvaluationResult $evaluation): array
+{
+    return [
+        'lookupCount' => $evaluation->lookupCount,
+        'lookupLimit' => $evaluation->lookupLimit,
+        'voidCount' => $evaluation->voidCount,
+        'voidLimit' => $evaluation->voidLimit,
+        'withinLimit' => $evaluation->withinLookupLimit(),
+        'withinVoidLimit' => $evaluation->withinVoidLimit(),
+        'tree' => serialize_spf_node($evaluation->root),
+        'issues' => serialize_issues($evaluation->issues),
+    ];
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function serialize_spf_lookup(SpfLookupResult $result): array
+{
+    $queries = [];
+    foreach ($result->queries as $query) {
+        $queries[] = [
+            'name' => $query->name,
+            'count' => count($query->records),
+            'records' => $query->records,
+        ];
+    }
+
+    return [
+        'domain' => $result->domain,
+        'record' => $result->record,
+        'found' => $result->found(),
+        'multiple' => $result->multiple,
+        'multipleRecords' => $result->multipleRecords(),
+        'queries' => $queries,
+        'validation' => $result->record !== null
+            ? serialize_spf_validation(SpfRecord::fromString($result->record))
+            : null,
+        'evaluation' => $result->evaluation !== null
+            ? serialize_spf_evaluation($result->evaluation)
+            : null,
     ];
 }
 
@@ -155,6 +271,44 @@ if ($path === '/api/lookup' && $method === 'GET') {
     }
 
     send_json(serialize_lookup($result));
+}
+
+if ($path === '/api/spf/validate' && in_array($method, ['POST', 'GET'], true)) {
+    if ($method === 'POST') {
+        $body = json_decode(file_get_contents('php://input') ?: '', true);
+        $record = is_array($body) ? ($body['record'] ?? null) : null;
+    } else {
+        $record = $_GET['record'] ?? null;
+    }
+
+    if (!is_string($record) || trim($record) === '') {
+        send_json(['error' => 'A non-empty "record" is required.'], 400);
+    }
+
+    send_json([
+        'record' => $record,
+        'validation' => serialize_spf_validation(SpfRecord::fromString($record)),
+    ]);
+}
+
+if ($path === '/api/spf/lookup' && $method === 'GET') {
+    $domain = $_GET['domain'] ?? null;
+    if (!is_string($domain) || trim($domain) === '') {
+        send_json(['error' => 'A non-empty "domain" is required.'], 400);
+    }
+
+    $ns = $_GET['ns'] ?? null;
+    $nameservers = is_string($ns) && trim($ns) !== '' ? [trim($ns)] : [];
+
+    $lookup = new SpfLookup(new NetDns2Resolver($nameservers));
+
+    try {
+        $result = $lookup->forDomain($domain);
+    } catch (ResolverException $e) {
+        send_json(['error' => $e->getMessage()], 502);
+    }
+
+    send_json(serialize_spf_lookup($result));
 }
 
 send_json(['error' => 'Not found.'], 404);
