@@ -80,7 +80,9 @@ final readonly class SpfTerm
 
     /**
      * A short human-readable description of the term, used in the parsed-term
-     * listing (e.g. "-all" -> "fail").
+     * listing. The term's kind is stated explicitly so a qualifier such as the
+     * "fail" of "-all" reads as the mechanism's result, not an error (e.g.
+     * "-all" -> "mechanism, fail"; "redirect=..." -> "modifier").
      */
     public function describe(): string
     {
@@ -89,7 +91,8 @@ final readonly class SpfTerm
         }
 
         $qualifier = $this->effectiveQualifier();
+        $label = self::QUALIFIER_LABELS[$qualifier] ?? 'pass';
 
-        return self::QUALIFIER_LABELS[$qualifier] ?? 'pass';
+        return 'mechanism, ' . $label;
     }
 }
