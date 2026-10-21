@@ -25,7 +25,8 @@ RUN composer install \
     --ignore-platform-reqs
 
 # --- Stage 3: runtime ---
-FROM php:8.3-cli-alpine
+# Pinned to a patched release for php2shell (CVE-2026-109618, CVE-2026-109619).
+FROM php:8.3.36-cli-alpine
 
 # ext-intl is needed by php-domain-parser for internationalized domain names.
 RUN apk add --no-cache icu-libs \
